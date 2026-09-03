@@ -205,6 +205,7 @@
     let retryTimer = 0
     let fileData = null
     let isListMode = false
+    let lastMode = null
 
     function setPluginActive(active) {
         document.body.classList.toggle('sort-reason-active', active)
@@ -222,6 +223,18 @@
             }
         }
         return isListMode
+    }
+
+    // 检测模式变化并触发刷新
+    function checkModeChange() {
+        const currentMode = checkMode()
+        if (lastMode !== null && currentMode !== lastMode) {
+            // 模式切换时刷新数据
+            fileData = null
+            reloadFileData()
+        }
+        lastMode = currentMode
+        return currentMode
     }
 
     function reloadFileData() {
@@ -243,17 +256,20 @@
 
     watchState('uri', () => {
         fileData = null
+        lastMode = null
         refresh(true)
     })
 
     onEvent('newListEntries', () => {
         fileData = null
+        lastMode = null
         refresh(true)
     })
 
     const observer = new MutationObserver(mutations => {
+        let needRefresh = false
         for (const mutation of mutations) {
-            if (mutation.type !== 'childList') continue
+            if (mutation.type !== 'childList' && mutation.type !== 'attributes') continue
             for (const node of mutation.addedNodes) {
                 if (node.nodeType !== Node.ELEMENT_NODE) continue
                 if (
@@ -261,21 +277,39 @@
                     node.querySelector?.('.file, .folder, .entry-details, .entry-size, .entry-ts') ||
                     node.matches?.('.list-wrapper')
                 ) {
-                    fileData = null
-                    refresh(false)
-                    return
+                    needRefresh = true
+                    break
+                }
+            }
+            // 检测 class 变化（list-mode <-> tiles-mode 切换）
+            if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                const target = mutation.target
+                if (target && target.matches && target.matches('.list-wrapper')) {
+                    needRefresh = true
+                    break
                 }
             }
         }
+        if (needRefresh) {
+            fileData = null
+            refresh(false)
+        }
     })
 
-    observer.observe(document.body, { childList: true, subtree: true })
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class']
+    })
 
     function refresh(retry) {
         if (queued) return
         queued = true
         requestAnimationFrame(() => {
             queued = false
+            // 检测模式变化
+            checkModeChange()
             updateAll()
             if (retry) {
                 clearTimeout(retryTimer)
@@ -460,7 +494,7 @@
     }
 
     function updateAll() {
-        checkMode()
+        checkModeChange()
 
         document.querySelectorAll('.sort-reason-time-value').forEach(el => {
             el.classList.remove('sort-reason-time-value')
@@ -626,6 +660,9 @@
     function init() {
         // 初始化 Tile Mode 記憶
         initTileModeModule();
+
+        // 初始模式檢測
+        lastMode = checkMode()
 
         // 如果有 HFS reloadList，暴露方法
         if (typeof HFS !== 'undefined') {
