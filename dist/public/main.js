@@ -1,0 +1,675 @@
+'use strict'; {
+
+    // ============================================================
+    //  Config Loading
+    // ============================================================
+    const config = typeof HFS !== 'undefined' && HFS.pluginConfig
+        ? HFS.pluginConfig
+        : {};
+
+    const ENABLE_TILE_MODE_MEMORY = config.enableTileModeMemory !== false;
+    const EXPIRE_HOURS = config.expireHours ?? 24;
+    const EXPIRE = EXPIRE_HOURS === 0 ? Infinity : EXPIRE_HOURS * 60 * 60 * 1000;
+
+    // ============================================================
+    //  Tile Mode Memory Module
+    // ============================================================
+    const TILE_STORAGE_KEY = 'short-folder-tile-mode';
+    let tileChanging = false;
+    let currentTileUri = '';
+    let globalDefaultTileSize = undefined;
+
+    function loadTileData() {
+        try {
+            const raw = localStorage.getItem(TILE_STORAGE_KEY);
+            if (!raw) return {};
+            return JSON.parse(raw);
+        } catch {
+            return {};
+        }
+    }
+
+    function saveTileData(data) {
+        localStorage.setItem(TILE_STORAGE_KEY, JSON.stringify(data));
+    }
+
+    function getTileModeKey(path) {
+        const cleanPath = path.split('?')[0];
+        return cleanPath.endsWith('/') ? cleanPath : cleanPath + '/';
+    }
+
+    function getTileSizeFromState() {
+        if (typeof HFS !== 'undefined' && HFS.state && HFS.state.tile_size !== undefined) {
+            return HFS.state.tile_size;
+        }
+        return undefined;
+    }
+
+    function setTileSize(value) {
+        if (typeof HFS !== 'undefined' && HFS.state) {
+            tileChanging = true;
+            HFS.state.tile_size = value;
+            tileChanging = false;
+        }
+    }
+
+    function getGlobalDefaultTileSize() {
+        if (globalDefaultTileSize !== undefined) {
+            return globalDefaultTileSize;
+        }
+        const current = getTileSizeFromState();
+        if (current !== undefined) {
+            globalDefaultTileSize = current;
+            return current;
+        }
+        return 0;
+    }
+
+    function cleanExpiredTileData() {
+        if (EXPIRE === Infinity) return;
+        const now = Date.now();
+        const data = loadTileData();
+        let changed = false;
+        for (const key in data) {
+            if (now - data[key].time > EXPIRE) {
+                delete data[key];
+                changed = true;
+            }
+        }
+        if (changed) {
+            saveTileData(data);
+        }
+    }
+
+    function loadTileModeForPath(path) {
+        if (!ENABLE_TILE_MODE_MEMORY) return;
+        if (typeof HFS === 'undefined' || !HFS.state) return;
+
+        cleanExpiredTileData();
+
+        const key = getTileModeKey(path);
+        const data = loadTileData();
+        const saved = data[key];
+
+        if (saved !== undefined && saved.size !== undefined) {
+            if (EXPIRE !== Infinity && Date.now() - saved.time > EXPIRE) {
+                delete data[key];
+                saveTileData(data);
+                const defaultSize = getGlobalDefaultTileSize();
+                if (getTileSizeFromState() !== defaultSize) {
+                    setTileSize(defaultSize);
+                }
+                return;
+            }
+            setTileSize(saved.size);
+            return;
+        }
+
+        const defaultSize = getGlobalDefaultTileSize();
+        const currentSize = getTileSizeFromState();
+        if (currentSize !== defaultSize) {
+            setTileSize(defaultSize);
+        }
+    }
+
+    function saveTileModeForPath(path) {
+        if (!ENABLE_TILE_MODE_MEMORY) return;
+        if (typeof HFS === 'undefined' || !HFS.state) return;
+
+        const key = getTileModeKey(path);
+        const currentSize = getTileSizeFromState();
+
+        if (currentSize === undefined) return;
+
+        const data = loadTileData();
+        data[key] = {
+            size: currentSize,
+            time: Date.now()
+        };
+        saveTileData(data);
+    }
+
+    function initTileModeModule() {
+        if (!ENABLE_TILE_MODE_MEMORY) return;
+        if (typeof HFS === 'undefined' || !HFS.watchState) return;
+
+        setTimeout(function() {
+            const initialSize = getTileSizeFromState();
+            if (initialSize !== undefined) {
+                globalDefaultTileSize = initialSize;
+            }
+        }, 100);
+
+        HFS.watchState('uri', function(uri) {
+            if (!uri) return;
+
+            const path = uri.split('?')[0];
+            const key = getTileModeKey(path);
+
+            if (currentTileUri === key) return;
+
+            if (currentTileUri) {
+                const data = loadTileData();
+                if (data[currentTileUri] !== undefined) {
+                    saveTileModeForPath(currentTileUri);
+                }
+            }
+
+            currentTileUri = key;
+            loadTileModeForPath(path);
+        });
+
+        HFS.watchState('tile_size', function(value) {
+            if (!ENABLE_TILE_MODE_MEMORY) return;
+            if (tileChanging) return;
+            if (!currentTileUri) return;
+
+            saveTileModeForPath(currentTileUri);
+        });
+
+        const currentUri = HFS.state ? HFS.state.uri : location.pathname;
+        if (currentUri) {
+            const path = currentUri.split('?')[0];
+            currentTileUri = getTileModeKey(path);
+
+            setTimeout(function() {
+                loadTileModeForPath(path);
+            }, 300);
+        }
+
+        window.addEventListener('beforeunload', function() {
+            if (currentTileUri) {
+                const data = loadTileData();
+                if (data[currentTileUri] !== undefined) {
+                    saveTileModeForPath(currentTileUri);
+                }
+            }
+        });
+    }
+
+    // ============================================================
+    //  Sort Reason Core
+    // ============================================================
+    const style = document.createElement('style')
+    style.textContent = `
+        .time-faint {
+            color: var(--faint-contrast);
+        }
+    `
+    document.head.appendChild(style)
+
+    const { state, watchState, onEvent, misc, elementToEntry } = HFS
+
+    let currentSort = state.sort_by || 'name'
+    let queued = false
+    let retryTimer = 0
+    let fileData = null
+    let isListMode = false
+
+    function setPluginActive(active) {
+        document.body.classList.toggle('sort-reason-active', active)
+    }
+
+    function checkMode() {
+        const listWrapper = document.querySelector('.list-wrapper')
+        if (listWrapper) {
+            if (listWrapper.classList.contains('list-mode')) {
+                isListMode = true
+            } else if (listWrapper.classList.contains('tiles-mode')) {
+                isListMode = false
+            } else {
+                isListMode = !listWrapper.classList.contains('tiles-mode')
+            }
+        }
+        return isListMode
+    }
+
+    function reloadFileData() {
+        fileData = null
+        if (typeof HFS.reloadList === 'function') {
+            HFS.reloadList()
+        }
+        setTimeout(() => {
+            fileData = getFileData()
+            updateAll()
+        }, 100)
+    }
+
+    watchState('sort_by', value => {
+        currentSort = value || 'name'
+        reloadFileData()
+        refresh(true)
+    }, true)
+
+    watchState('uri', () => {
+        fileData = null
+        refresh(true)
+    })
+
+    onEvent('newListEntries', () => {
+        fileData = null
+        refresh(true)
+    })
+
+    const observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+            if (mutation.type !== 'childList') continue
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType !== Node.ELEMENT_NODE) continue
+                if (
+                    node.matches?.('.file, .folder, .entry-details, .entry-size, .entry-ts') ||
+                    node.querySelector?.('.file, .folder, .entry-details, .entry-size, .entry-ts') ||
+                    node.matches?.('.list-wrapper')
+                ) {
+                    fileData = null
+                    refresh(false)
+                    return
+                }
+            }
+        }
+    })
+
+    observer.observe(document.body, { childList: true, subtree: true })
+
+    function refresh(retry) {
+        if (queued) return
+        queued = true
+        requestAnimationFrame(() => {
+            queued = false
+            updateAll()
+            if (retry) {
+                clearTimeout(retryTimer)
+                retryTimer = setTimeout(() => {
+                    updateAll()
+                    setTimeout(updateAll, 80)
+                    setTimeout(updateAll, 200)
+                }, 0)
+            }
+        })
+    }
+
+    function getFileData() {
+        try {
+            let list = null
+
+            if (HFS.state && HFS.state.list) {
+                list = HFS.state.list
+            }
+
+            if (!list && typeof HFS.getFileList === 'function') {
+                list = HFS.getFileList()
+            }
+
+            if (!list && typeof HFS.apiCall === 'function') {
+                try {
+                    const result = HFS.apiCall('get_file_list', { uri: state.uri || '/' })
+                    if (result && result.list) {
+                        list = result.list
+                    }
+                } catch (e) {}
+            }
+
+            if (!list) {
+                const items = document.querySelectorAll('.file, .folder')
+                list = []
+                for (const li of items) {
+                    try {
+                        const entry = elementToEntry(li)
+                        if (entry) {
+                            list.push(entry)
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            if (list && list.length > 0) {
+                return list
+            }
+        } catch (e) {}
+        return null
+    }
+
+    function findEntry(name, isFolder) {
+        if (!fileData) {
+            fileData = getFileData()
+        }
+        if (!fileData) return null
+
+        let searchName = name
+        if (isFolder && !searchName.endsWith('/')) {
+            searchName = name + '/'
+        }
+        if (!isFolder && searchName.endsWith('/')) {
+            searchName = searchName.slice(0, -1)
+        }
+        const searchClean = searchName.replace(/\/$/, '')
+
+        for (const entry of fileData) {
+            const entryClean = entry.n.replace(/\/$/, '')
+            if (entryClean === searchClean) {
+                return entry
+            }
+        }
+
+        try {
+            const decoded = decodeURIComponent(searchClean)
+            for (const entry of fileData) {
+                const entryClean = entry.n.replace(/\/$/, '')
+                if (entryClean === decoded) {
+                    return entry
+                }
+            }
+        } catch (e) {}
+
+        let bestMatch = null
+        let bestScore = 0
+        for (const entry of fileData) {
+            const entryClean = entry.n.replace(/\/$/, '')
+            if (entryClean.includes(searchClean) || searchClean.includes(entryClean)) {
+                const score = Math.min(entryClean.length, searchClean.length)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestMatch = entry
+                }
+            }
+        }
+        if (bestMatch && bestScore >= 2) {
+            return bestMatch
+        }
+
+        return null
+    }
+
+    function formatTime(value) {
+        if (!value) return null
+
+        if (value instanceof Date) {
+            value = value.toISOString()
+        }
+
+        if (typeof value !== 'string') {
+            try {
+                value = String(value)
+            } catch (e) {
+                return null
+            }
+        }
+
+        const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
+        if (match) {
+            const year = match[1].slice(-2)
+            const month = match[2]
+            const day = match[3]
+            const hour = match[4]
+            const minute = match[5]
+            if (hour === '00' && minute === '00') {
+                return `${year}-${month}-${day}`
+            }
+            return `${year}-${month}-${day} ${hour}:${minute}`
+        }
+
+        try {
+            const d = new Date(value)
+            if (!isNaN(d.getTime())) {
+                const year = String(d.getFullYear()).slice(-2)
+                const month = String(d.getMonth() + 1).padStart(2, '0')
+                const day = String(d.getDate()).padStart(2, '0')
+                const hour = String(d.getHours()).padStart(2, '0')
+                const minute = String(d.getMinutes()).padStart(2, '0')
+                if (hour === '00' && minute === '00') {
+                    return `${year}-${month}-${day}`
+                }
+                return `${year}-${month}-${day} ${hour}:${minute}`
+            }
+        } catch (e) {}
+
+        if (value.match(/^\d{4}\/\d{2}\/\d{2}/) || value.match(/^\d{2}\/\d{2}\/\d{2}/)) {
+            return value.replace(/\//g, '-')
+        }
+
+        return null
+    }
+
+    function restoreNative(li) {
+        const details = li?.querySelector('.entry-details')
+        if (!details) return
+
+        const size = details.querySelector('.entry-size')
+        const ts = details.querySelector('.entry-ts')
+
+        if (size) {
+            size.classList.remove('sort-reason-time-value', 'sort-reason-time')
+            size.style.display = ''
+            size.style.color = ''
+            size.title = ''
+            const nameEl = li.querySelector('.entry-name')
+            if (nameEl) {
+                const entry = findEntry(nameEl.textContent.trim(), li.classList.contains('folder'))
+                if (entry && !li.classList.contains('folder')) {
+                    size.textContent = entry.s != null ? misc.formatBytes(entry.s) : ''
+                } else if (li.classList.contains('folder')) {
+                    size.textContent = ''
+                }
+            }
+        }
+        if (ts) {
+            ts.style.display = ''
+            ts.style.color = ''
+            ts.classList.remove('sort-reason-time')
+        }
+    }
+
+    function updateAll() {
+        checkMode()
+
+        document.querySelectorAll('.sort-reason-time-value').forEach(el => {
+            el.classList.remove('sort-reason-time-value')
+        })
+
+        if (isListMode) {
+            setPluginActive(false)
+            document.querySelectorAll('.file, .folder').forEach(restoreNative)
+            document.querySelectorAll('.entry-ts[style*="display: none"]').forEach(el => {
+                el.style.display = ''
+            })
+            return
+        }
+
+        if (currentSort === 'name' || currentSort === 'size') {
+            setPluginActive(false)
+            document.querySelectorAll('.sort-reason-time-value, .sort-reason-time').forEach(el => {
+                el.classList.remove('sort-reason-time-value', 'sort-reason-time')
+                if (el.classList.contains('entry-size')) {
+                    el.style.display = ''
+                    el.style.color = ''
+                    el.title = ''
+                    const li = el.closest('.file, .folder')
+                    if (li) {
+                        const nameEl = li.querySelector('.entry-name')
+                        if (nameEl) {
+                            const entry = findEntry(nameEl.textContent.trim(), li.classList.contains('folder'))
+                            if (entry && !li.classList.contains('folder')) {
+                                el.textContent = entry.s != null ? misc.formatBytes(entry.s) : ''
+                            } else if (li.classList.contains('folder')) {
+                                el.textContent = ''
+                            }
+                        }
+                    }
+                }
+                if (el.classList.contains('entry-ts')) {
+                    el.style.display = ''
+                    el.style.color = ''
+                }
+            })
+            document.querySelectorAll('.entry-ts[style*="display: none"]').forEach(el => {
+                el.style.display = ''
+            })
+            return
+        }
+
+        setPluginActive(true)
+        if (!fileData) {
+            fileData = getFileData()
+        }
+        document.querySelectorAll('.file, .folder').forEach(updateEntry)
+    }
+
+    function updateEntry(li) {
+        const details = li.querySelector('.entry-details')
+        if (!details) return
+
+        const nameEl = li.querySelector('.entry-name')
+        if (!nameEl) return
+
+        const domName = nameEl.textContent.trim()
+        const isFolder = li.classList.contains('folder')
+
+        const entry = findEntry(domName, isFolder)
+
+        let size = details.querySelector('.entry-size')
+        const ts = details.querySelector('.entry-ts')
+
+        if (!size) {
+            size = document.createElement('span')
+            size.className = 'entry-size'
+            if (ts) {
+                details.insertBefore(size, ts)
+            } else {
+                details.appendChild(size)
+            }
+        }
+
+        if (ts) {
+            ts.style.display = 'none'
+        }
+
+        if (currentSort === 'extension') {
+            let ext = ''
+            let sizeStr = ''
+
+            if (entry && entry.ext) {
+                ext = entry.ext
+            } else if (entry && entry.n) {
+                const dot = entry.n.lastIndexOf('.')
+                if (dot > 0 && dot < entry.n.length - 1) {
+                    ext = entry.n.substring(dot + 1).toLowerCase()
+                }
+            } else {
+                const dot = domName.lastIndexOf('.')
+                if (dot > 0 && dot < domName.length - 1) {
+                    ext = domName.substring(dot + 1).toLowerCase()
+                }
+            }
+
+            if (entry && entry.s != null) {
+                sizeStr = misc.formatBytes(entry.s)
+            }
+
+            if (ext && sizeStr) {
+                size.textContent = ext + ' - ' + sizeStr
+            } else if (ext) {
+                size.textContent = ext
+            } else if (sizeStr) {
+                size.textContent = sizeStr
+            } else {
+                size.textContent = ''
+            }
+            size.style.display = ''
+            size.title = 'Sort by: extension'
+            size.classList.add('sort-reason-time-value')
+            return
+        }
+
+        let displayText = null
+
+        if (entry) {
+            let timeValue = null
+            if (currentSort === 'time') {
+                timeValue = entry.m || entry.c || null
+            } else if (currentSort === 'creation') {
+                timeValue = entry.c || entry.m || null
+            }
+
+            if (timeValue) {
+                displayText = formatTime(timeValue)
+            }
+        }
+
+        if (!displayText && ts) {
+            const tsText = ts.textContent.trim()
+            if (tsText) {
+                displayText = tsText
+            }
+        }
+
+        if (displayText) {
+            const parts = displayText.match(/^(.+?)\s+(\d{2}:\d{2})$/)
+            if (parts) {
+                size.innerHTML = `${parts[1]} <span class="time-faint">${parts[2]}</span>`
+            } else {
+                size.textContent = displayText
+            }
+            size.style.display = ''
+            size.title = 'Sort by: ' + currentSort
+            size.classList.add('sort-reason-time-value')
+        } else {
+            size.textContent = ''
+            size.style.display = ''
+            size.title = ''
+            size.classList.remove('sort-reason-time-value')
+        }
+    }
+
+    // ============================================================
+    //  Initialization
+    // ============================================================
+    function init() {
+        // 初始化 Tile Mode 記憶
+        initTileModeModule();
+
+        // 如果有 HFS reloadList，暴露方法
+        if (typeof HFS !== 'undefined') {
+            HFS.short = {
+                reload: function() {
+                    fileData = null;
+                    if (typeof HFS.reloadList === 'function') {
+                        HFS.reloadList();
+                    }
+                    setTimeout(() => {
+                        fileData = getFileData();
+                        updateAll();
+                    }, 100);
+                },
+                tile: {
+                    save: function() {
+                        if (ENABLE_TILE_MODE_MEMORY && currentTileUri) {
+                            saveTileModeForPath(currentTileUri);
+                        }
+                    },
+                    load: function(path) {
+                        if (ENABLE_TILE_MODE_MEMORY) {
+                            loadTileModeForPath(path || location.pathname);
+                        }
+                    },
+                    cleanExpired: cleanExpiredTileData
+                }
+            };
+        }
+
+        // 初始刷新
+        setTimeout(() => {
+            fileData = getFileData();
+            updateAll();
+        }, 200);
+    }
+
+    // 防止多次初始化
+    let initialized = false;
+    function safeInit() {
+        if (initialized) return;
+        initialized = true;
+        init();
+    }
+
+    safeInit();
+}
