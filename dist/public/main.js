@@ -62,7 +62,9 @@
             globalDefaultTileSize = current;
             return current;
         }
-        return 0;
+        // HFS 原生默认是平铺模式 (2)
+        globalDefaultTileSize = 2;
+        return 2;
     }
 
     function cleanExpiredTileData() {
@@ -225,11 +227,9 @@
         return isListMode
     }
 
-    // 检测模式变化并触发刷新
     function checkModeChange() {
         const currentMode = checkMode()
         if (lastMode !== null && currentMode !== lastMode) {
-            // 模式切换时刷新数据
             fileData = null
             reloadFileData()
         }
@@ -281,7 +281,6 @@
                     break
                 }
             }
-            // 检测 class 变化（list-mode <-> tiles-mode 切换）
             if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
                 const target = mutation.target
                 if (target && target.matches && target.matches('.list-wrapper')) {
@@ -308,7 +307,6 @@
         queued = true
         requestAnimationFrame(() => {
             queued = false
-            // 检测模式变化
             checkModeChange()
             updateAll()
             if (retry) {
@@ -658,13 +656,9 @@
     //  Initialization
     // ============================================================
     function init() {
-        // 初始化 Tile Mode 記憶
         initTileModeModule();
-
-        // 初始模式檢測
         lastMode = checkMode()
 
-        // 如果有 HFS reloadList，暴露方法
         if (typeof HFS !== 'undefined') {
             HFS.short = {
                 reload: function() {
@@ -688,19 +682,23 @@
                             loadTileModeForPath(path || location.pathname);
                         }
                     },
-                    cleanExpired: cleanExpiredTileData
+                    cleanExpired: cleanExpiredTileData,
+                    getStorage: function() {
+                        return loadTileData();
+                    },
+                    getDefault: function() {
+                        return getGlobalDefaultTileSize();
+                    }
                 }
             };
         }
 
-        // 初始刷新
         setTimeout(() => {
             fileData = getFileData();
             updateAll();
         }, 200);
     }
 
-    // 防止多次初始化
     let initialized = false;
     function safeInit() {
         if (initialized) return;
