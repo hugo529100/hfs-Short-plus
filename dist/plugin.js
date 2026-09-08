@@ -1,5 +1,5 @@
 exports.repo = "Hug3O/Short-plus"
-exports.version = 1.1
+exports.version = 1.2
 exports.description = "Enhanced file sorting with tile mode memory"
 exports.apiRequired = 9.6
 exports.frontend_js = "main.js"
@@ -18,5 +18,23 @@ exports.config = {
         max: 8760,
         default: 24,
         helper: "Records older than this will be removed. Set to 0 for no expiration."
+    }
+}
+
+exports.init = (api) => {
+    let serverTileSize;
+    
+    try {
+        const hfsConfig = api.getHfsConfig();
+        if (hfsConfig?.tile_size !== undefined) {
+            const parsed = parseInt(hfsConfig.tile_size);
+            if (!isNaN(parsed) && parsed > 0) {
+                serverTileSize = parsed;
+            }
+        }
+    } catch (e) {}
+    
+    if (api.setPluginConfig) {
+        api.setPluginConfig('serverTileSize', serverTileSize);
     }
 }
