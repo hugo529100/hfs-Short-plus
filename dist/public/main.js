@@ -118,41 +118,43 @@
     }
 
     function loadTileModeForPath(path) {
-        if (!ENABLE_TILE_MODE_MEMORY) return;
-        if (typeof HFS === 'undefined' || !HFS.state) return;
+    if (!ENABLE_TILE_MODE_MEMORY) return;
+    if (typeof HFS === 'undefined' || !HFS.state) return;
 
-        cleanExpiredTileData();
+    cleanExpiredTileData();
 
-        const key = getTileModeKey(path);
-        const data = loadTileData();
-        const saved = data[key];
+    const key = getTileModeKey(path);
+    const data = loadTileData();
+    const saved = data[key];
 
-        // 默认值：服务器配置或 2
-        const defaultSize = getServerDefaultTileSize() || 2;
+    const defaultSize = getServerDefaultTileSize() || 2;
 
-        // 如果有有效记录，使用记录值
-        if (saved !== undefined && saved.size !== undefined) {
-            if (EXPIRE !== Infinity && Date.now() - saved.time > EXPIRE) {
-                delete data[key];
-                saveTileData(data);
-                // 记录过期，强制使用默认值
-                setTileSize(defaultSize);
-                applyTileSizeToDOM(defaultSize);
-                lastSavedTileSize = defaultSize;
-                return;
-            }
-            // 有有效记录
-            setTileSize(saved.size);
-            applyTileSizeToDOM(saved.size);
-            lastSavedTileSize = saved.size;
+    if (saved !== undefined && saved.size !== undefined) {
+        if (EXPIRE !== Infinity && Date.now() - saved.time > EXPIRE) {
+            delete data[key];
+            saveTileData(data);
+            setTileSize(defaultSize);
+            applyTileSizeToDOM(defaultSize);
+            lastSavedTileSize = defaultSize;
             return;
         }
-
-        // 没有记录，强制使用默认值
-        setTileSize(defaultSize);
-        applyTileSizeToDOM(defaultSize);
-        lastSavedTileSize = defaultSize;
+        
+        // ✅ 新增：訪問時刷新時間戳
+        if (ENABLE_TILE_MODE_MEMORY) {
+            data[key].time = Date.now();
+            saveTileData(data);
+        }
+        
+        setTileSize(saved.size);
+        applyTileSizeToDOM(saved.size);
+        lastSavedTileSize = saved.size;
+        return;
     }
+
+    setTileSize(defaultSize);
+    applyTileSizeToDOM(defaultSize);
+    lastSavedTileSize = defaultSize;
+}
 
     function saveTileModeForPath(path) {
         if (!ENABLE_TILE_MODE_MEMORY) return;
