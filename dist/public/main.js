@@ -118,43 +118,43 @@
     }
 
     function loadTileModeForPath(path) {
-    if (!ENABLE_TILE_MODE_MEMORY) return;
-    if (typeof HFS === 'undefined' || !HFS.state) return;
+        if (!ENABLE_TILE_MODE_MEMORY) return;
+        if (typeof HFS === 'undefined' || !HFS.state) return;
 
-    cleanExpiredTileData();
+        cleanExpiredTileData();
 
-    const key = getTileModeKey(path);
-    const data = loadTileData();
-    const saved = data[key];
+        const key = getTileModeKey(path);
+        const data = loadTileData();
+        const saved = data[key];
 
-    const defaultSize = getServerDefaultTileSize() || 2;
+        const defaultSize = getServerDefaultTileSize() || 2;
 
-    if (saved !== undefined && saved.size !== undefined) {
-        if (EXPIRE !== Infinity && Date.now() - saved.time > EXPIRE) {
-            delete data[key];
-            saveTileData(data);
-            setTileSize(defaultSize);
-            applyTileSizeToDOM(defaultSize);
-            lastSavedTileSize = defaultSize;
+        if (saved !== undefined && saved.size !== undefined) {
+            if (EXPIRE !== Infinity && Date.now() - saved.time > EXPIRE) {
+                delete data[key];
+                saveTileData(data);
+                setTileSize(defaultSize);
+                applyTileSizeToDOM(defaultSize);
+                lastSavedTileSize = defaultSize;
+                return;
+            }
+
+            // 访问时刷新时间戳
+            if (ENABLE_TILE_MODE_MEMORY) {
+                data[key].time = Date.now();
+                saveTileData(data);
+            }
+
+            setTileSize(saved.size);
+            applyTileSizeToDOM(saved.size);
+            lastSavedTileSize = saved.size;
             return;
         }
-        
-        // ✅ 新增：訪問時刷新時間戳
-        if (ENABLE_TILE_MODE_MEMORY) {
-            data[key].time = Date.now();
-            saveTileData(data);
-        }
-        
-        setTileSize(saved.size);
-        applyTileSizeToDOM(saved.size);
-        lastSavedTileSize = saved.size;
-        return;
-    }
 
-    setTileSize(defaultSize);
-    applyTileSizeToDOM(defaultSize);
-    lastSavedTileSize = defaultSize;
-}
+        setTileSize(defaultSize);
+        applyTileSizeToDOM(defaultSize);
+        lastSavedTileSize = defaultSize;
+    }
 
     function saveTileModeForPath(path) {
         if (!ENABLE_TILE_MODE_MEMORY) return;
@@ -185,7 +185,7 @@
                 const path = currentUri.split('?')[0];
                 currentTileUri = getTileModeKey(path);
                 loadTileModeForPath(path);
-                
+
                 const currentSize = getTileSizeFromState();
                 if (currentSize !== undefined) {
                     lastSavedTileSize = currentSize;
@@ -210,10 +210,10 @@
 
             // 切换到新目录
             currentTileUri = newKey;
-            
+
             // 加载新目录
             loadTileModeForPath(path);
-            
+
             const currentSize = getTileSizeFromState();
             if (currentSize !== undefined) {
                 lastSavedTileSize = currentSize;
@@ -235,7 +235,7 @@
             if (value !== undefined) {
                 applyTileSizeToDOM(value);
             }
-            
+
             // 保存到 localStorage
             scheduleSave();
         });
@@ -254,6 +254,18 @@
         .time-faint {
             color: var(--faint-contrast);
         }
+
+        /* tile 模式下，當排序依據顯示在 entry-details 裡時，讓菜單按鈕換到下一行 */
+        body.sort-reason-active .list-wrapper.tiles-mode .entry-panel {
+            flex-wrap: wrap;
+        }
+
+        body.sort-reason-active .list-wrapper.tiles-mode .entry-panel .entry-details {
+            flex: 1 1 100%;
+            min-width: 0;
+        }
+
+
     `
     document.head.appendChild(style)
 
