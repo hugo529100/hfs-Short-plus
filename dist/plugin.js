@@ -1,5 +1,5 @@
 exports.repo = "Hug3O/Short-plus"
-exports.version = 1.4
+exports.version = 1.5
 exports.description = "Enhanced file sorting with tile mode memory"
 exports.apiRequired = 9.6
 exports.frontend_js = "main.js"

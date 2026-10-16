@@ -1,8 +1,5 @@
 'use strict'; {
 
-    // ============================================================
-    //  Config Loading
-    // ============================================================
     const config = typeof HFS !== 'undefined' && HFS.pluginConfig
         ? HFS.pluginConfig
         : {};
@@ -11,12 +8,8 @@
     const EXPIRE_HOURS = config.expireHours ?? 24;
     const EXPIRE = EXPIRE_HOURS === 0 ? Infinity : EXPIRE_HOURS * 60 * 60 * 1000;
 
-    // 从服务器配置获取默认 tile size
     const SERVER_TILE_SIZE = config.serverTileSize;
 
-    // ============================================================
-    //  Tile Mode Memory Module
-    // ============================================================
     const TILE_STORAGE_KEY = 'short-folder-tile-mode';
     let tileChanging = false;
     let currentTileUri = '';
@@ -139,7 +132,6 @@
                 return;
             }
 
-            // 访问时刷新时间戳
             if (ENABLE_TILE_MODE_MEMORY) {
                 data[key].time = Date.now();
                 saveTileData(data);
@@ -178,7 +170,6 @@
         if (!ENABLE_TILE_MODE_MEMORY) return;
         if (typeof HFS === 'undefined' || !HFS.watchState) return;
 
-        // 初始化时加载
         setTimeout(function() {
             const currentUri = HFS.state ? HFS.state.uri : location.pathname;
             if (currentUri) {
@@ -193,7 +184,6 @@
             }
         }, 100);
 
-        // 监听 URI 变化 - 目录切换
         HFS.watchState('uri', function(uri) {
             if (!uri) return;
 
@@ -202,16 +192,12 @@
 
             if (currentTileUri === newKey) return;
 
-            // 标记正在导航
             isNavigating = true;
 
-            // 保存当前目录的设置
             immediateSave();
 
-            // 切换到新目录
             currentTileUri = newKey;
 
-            // 加载新目录
             loadTileModeForPath(path);
 
             const currentSize = getTileSizeFromState();
@@ -219,13 +205,11 @@
                 lastSavedTileSize = currentSize;
             }
 
-            // 延迟解除导航标记
             setTimeout(() => {
                 isNavigating = false;
             }, 300);
         });
 
-        // 监听 tile_size 变化 - 用户手动调整
         HFS.watchState('tile_size', function(value) {
             if (!ENABLE_TILE_MODE_MEMORY) return;
             if (tileChanging) return;
@@ -236,26 +220,20 @@
                 applyTileSizeToDOM(value);
             }
 
-            // 保存到 localStorage
             scheduleSave();
         });
 
-        // 页面卸载前保存
         window.addEventListener('beforeunload', function() {
             immediateSave();
         });
     }
 
-    // ============================================================
-    //  Sort Reason Core
-    // ============================================================
     const style = document.createElement('style')
     style.textContent = `
         .time-faint {
             color: var(--faint-contrast);
         }
 
-        /* tile 模式下，當排序依據顯示在 entry-details 裡時，讓菜單按鈕換到下一行 */
         body.sort-reason-active .list-wrapper.tiles-mode .entry-panel {
             flex-wrap: wrap;
         }
@@ -481,54 +459,67 @@
         return null
     }
 
+    const APPEND_Z_FOR_NAIVE_ISO = true;
+
+    function pad2(n) {
+        return String(n).padStart(2, '0')
+    }
+
     function formatTime(value) {
         if (!value) return null
 
-        if (value instanceof Date) {
-            value = value.toISOString()
-        }
+        let d = null
 
-        if (typeof value !== 'string') {
+        if (value instanceof Date) {
+            d = value
+        } else if (typeof value === 'number') {
+            d = new Date(value)
+        } else {
+            let str
             try {
-                value = String(value)
+                str = String(value)
             } catch (e) {
                 return null
             }
-        }
 
-        const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/)
-        if (match) {
-            const year = match[1].slice(-2)
-            const month = match[2]
-            const day = match[3]
-            const hour = match[4]
-            const minute = match[5]
-            if (hour === '00' && minute === '00') {
-                return `${year}-${month}-${day}`
-            }
-            return `${year}-${month}-${day} ${hour}:${minute}`
-        }
-
-        try {
-            const d = new Date(value)
-            if (!isNaN(d.getTime())) {
-                const year = String(d.getFullYear()).slice(-2)
-                const month = String(d.getMonth() + 1).padStart(2, '0')
-                const day = String(d.getDate()).padStart(2, '0')
-                const hour = String(d.getHours()).padStart(2, '0')
-                const minute = String(d.getMinutes()).padStart(2, '0')
-                if (hour === '00' && minute === '00') {
-                    return `${year}-${month}-${day}`
+            const slashMatch = str.match(/^(\d{2,4})\/(\d{2})\/(\d{2})(.*)$/)
+            if (slashMatch) {
+                let year = slashMatch[1]
+                if (year.length === 2) {
+                    year = '20' + year
                 }
-                return `${year}-${month}-${day} ${hour}:${minute}`
+                str = `${year}-${slashMatch[2]}-${slashMatch[3]}${slashMatch[4]}`
             }
-        } catch (e) {}
 
-        if (value.match(/^\d{4}\/\d{2}\/\d{2}/) || value.match(/^\d{2}\/\d{2}\/\d{2}/)) {
-            return value.replace(/\//g, '-')
+            const naiveIso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/
+            if (APPEND_Z_FOR_NAIVE_ISO && naiveIso.test(str)) {
+                str = str + 'Z'
+            }
+
+            d = new Date(str)
         }
 
-        return null
+        if (!d || isNaN(d.getTime())) {
+            try {
+                const s = String(value)
+                const m = s.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/)
+                if (m) {
+                    return `${m[1].slice(-2)}-${m[2]}-${m[3]}`
+                }
+            } catch (e) {}
+            return null
+        }
+
+        const year = String(d.getFullYear()).slice(-2)
+        const month = pad2(d.getMonth() + 1)
+        const day = pad2(d.getDate())
+        const hour = pad2(d.getHours())
+        const minute = pad2(d.getMinutes())
+
+        if (hour === '00' && minute === '00') {
+            return `${year}-${month}-${day}`
+        }
+        return `${year}-${month}-${day} ${hour}:${minute}`
     }
 
     function restoreNative(li) {
@@ -721,9 +712,6 @@
         }
     }
 
-    // ============================================================
-    //  Initialization
-    // ============================================================
     function init() {
         initTileModeModule();
         lastMode = checkMode()
