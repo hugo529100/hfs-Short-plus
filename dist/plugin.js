@@ -1,15 +1,21 @@
 exports.repo = "Hug3O/Short-plus"
-exports.version = 1.5
-exports.description = "Enhanced file sorting with tile mode memory"
+exports.version = 1.6
+exports.description = "Improves sorted views by showing time or extension instead of size; also remembers tile size per folder"
 exports.apiRequired = 9.6
 exports.frontend_js = "main.js"
 
 exports.config = {
+    enableEnhancedSorting: {
+        label: "Enable Enhanced Sorting UI",
+        type: "boolean",
+        default: true,
+        helperText: "Core feature. When enabled, the size column is replaced with time / extension info based on the current sort. Disable to keep the native interface."
+    },
     enableTileModeMemory: {
         label: "Enable Tile Mode Memory",
         type: "boolean",
         default: true,
-        helper: "When disabled, tile mode settings per folder will not be remembered"
+        helperText: "When disabled, tile mode settings per folder will not be remembered"
     },
     expireHours: {
         label: "Memory Expiration (hours)",
@@ -17,13 +23,13 @@ exports.config = {
         min: 0,
         max: 8760,
         default: 24,
-        helper: "Records older than this will be removed. Set to 0 for no expiration."
+        helperText: "Records older than this will be removed. Set to 0 for no expiration."
     }
 }
 
 exports.init = (api) => {
     let serverTileSize;
-    
+
     try {
         const hfsConfig = api.getHfsConfig();
         if (hfsConfig?.tile_size !== undefined) {
@@ -33,7 +39,7 @@ exports.init = (api) => {
             }
         }
     } catch (e) {}
-    
+
     if (api.setPluginConfig) {
         api.setPluginConfig('serverTileSize', serverTileSize);
     }

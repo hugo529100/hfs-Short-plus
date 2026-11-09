@@ -4,6 +4,7 @@
         ? HFS.pluginConfig
         : {};
 
+    const ENABLE_ENHANCED_SORTING = config.enableEnhancedSorting !== false;
     const ENABLE_TILE_MODE_MEMORY = config.enableTileModeMemory !== false;
     const EXPIRE_HOURS = config.expireHours ?? 24;
     const EXPIRE = EXPIRE_HOURS === 0 ? Infinity : EXPIRE_HOURS * 60 * 60 * 1000;
@@ -552,6 +553,16 @@
     }
 
     function updateAll() {
+        // Core switch: when enhanced sorting is disabled, restore native UI and exit.
+        if (!ENABLE_ENHANCED_SORTING) {
+            setPluginActive(false)
+            document.querySelectorAll('.file, .folder').forEach(restoreNative)
+            document.querySelectorAll('.entry-ts[style*="display: none"]').forEach(el => {
+                el.style.display = ''
+            })
+            return
+        }
+
         checkModeChange()
 
         document.querySelectorAll('.sort-reason-time-value').forEach(el => {
