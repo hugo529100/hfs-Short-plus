@@ -1,5 +1,5 @@
 exports.repo = "Hug3O/Short-plus"
-exports.version = 1.6
+exports.version = 1.8
 exports.description = "Improves sorted views by showing time or extension instead of size; also remembers tile size per folder"
 exports.apiRequired = 9.6
 exports.frontend_js = "main.js"
@@ -28,6 +28,28 @@ exports.config = {
 }
 
 exports.init = (api) => {
+    // Respect the backend switch: if tile memory is disabled, do nothing at all.
+    // This prevents the plugin from reading the YAML tile_size setting or
+    // injecting serverTileSize into the frontend config.
+    let tileMemoryEnabled = true;
+    try {
+        const cfg = api.getPluginConfig ? api.getPluginConfig() : null;
+        if (cfg && cfg.enableTileModeMemory === false) {
+            tileMemoryEnabled = false;
+        }
+    } catch (e) {}
+
+    if (!tileMemoryEnabled) {
+        // Explicitly clear any previously injected value so a stale config
+        // from a previous run cannot linger.
+        try {
+            if (api.setPluginConfig) {
+                api.setPluginConfig('serverTileSize', undefined);
+            }
+        } catch (e) {}
+        return;
+    }
+
     let serverTileSize;
 
     try {

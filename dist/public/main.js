@@ -9,7 +9,8 @@
     const EXPIRE_HOURS = config.expireHours ?? 24;
     const EXPIRE = EXPIRE_HOURS === 0 ? Infinity : EXPIRE_HOURS * 60 * 60 * 1000;
 
-    const SERVER_TILE_SIZE = config.serverTileSize;
+    // Only trust the server-provided tile size when memory is actually enabled.
+    const SERVER_TILE_SIZE = ENABLE_TILE_MODE_MEMORY ? config.serverTileSize : undefined;
 
     const TILE_STORAGE_KEY = 'short-folder-tile-mode';
     let tileChanging = false;
@@ -33,8 +34,49 @@
     }
 
     function getTileModeKey(path) {
-        const cleanPath = path.split('?')[0];
-        return cleanPath.endsWith('/') ? cleanPath : cleanPath + '/';
+        if (!path) return '/';
+
+        let raw = String(path);
+
+        // Strip origin if a full URL was passed.
+        try {
+            if (/^https?:\/\//i.test(raw)) {
+                const u = new URL(raw);
+                raw = u.pathname + u.search;
+            }
+        } catch (e) {}
+
+        // API style: /~/api/get_file_list?uri=%2FPictures%2F
+        // Extract and decode the real folder path from the uri query parameter.
+        try {
+            const qIndex = raw.indexOf('?');
+            if (qIndex !== -1) {
+                const query = raw.slice(qIndex + 1);
+                const params = new URLSearchParams(query);
+                const uriParam = params.get('uri');
+                if (uriParam) {
+                    raw = decodeURIComponent(uriParam);
+                } else {
+                    raw = raw.slice(0, qIndex);
+                }
+            }
+        } catch (e) {
+            raw = raw.split('?')[0];
+        }
+
+        // Decode any remaining percent-encoding (path style URIs may be encoded).
+        try {
+            raw = decodeURIComponent(raw);
+        } catch (e) {}
+
+        // Normalize leading slash and trailing slash.
+        if (!raw.startsWith('/')) raw = '/' + raw;
+        if (!raw.endsWith('/')) raw = raw + '/';
+
+        // Collapse duplicate slashes.
+        raw = raw.replace(/\/+/g, '/');
+
+        return raw;
     }
 
     function getTileSizeFromState() {
@@ -62,6 +104,7 @@
     }
 
     function getServerDefaultTileSize() {
+        if (!ENABLE_TILE_MODE_MEMORY) return undefined;
         return SERVER_TILE_SIZE;
     }
 
@@ -168,15 +211,20 @@
     }
 
     function initTileModeModule() {
-        if (!ENABLE_TILE_MODE_MEMORY) return;
+        if (!ENABLE_TILE_MODE_MEMORY) {
+            // Do not leave stale per-folder data that would silently reapply
+            // if the switch is turned back on.
+            try { localStorage.removeItem(TILE_STORAGE_KEY); } catch (e) {}
+            return;
+        }
         if (typeof HFS === 'undefined' || !HFS.watchState) return;
 
         setTimeout(function() {
             const currentUri = HFS.state ? HFS.state.uri : location.pathname;
             if (currentUri) {
                 const path = currentUri.split('?')[0];
-                currentTileUri = getTileModeKey(path);
-                loadTileModeForPath(path);
+                currentTileUri = getTileModeKey(currentUri);
+                loadTileModeForPath(currentUri);
 
                 const currentSize = getTileSizeFromState();
                 if (currentSize !== undefined) {
@@ -188,8 +236,7 @@
         HFS.watchState('uri', function(uri) {
             if (!uri) return;
 
-            const path = uri.split('?')[0];
-            const newKey = getTileModeKey(path);
+            const newKey = getTileModeKey(uri);
 
             if (currentTileUri === newKey) return;
 
@@ -199,7 +246,7 @@
 
             currentTileUri = newKey;
 
-            loadTileModeForPath(path);
+            loadTileModeForPath(uri);
 
             const currentSize = getTileSizeFromState();
             if (currentSize !== undefined) {
@@ -738,17 +785,18 @@
                         fileData = getFileData();
                         updateAll();
                     }, 100);
-                },
-                tile: {
+                }
+            };
+
+            if (ENABLE_TILE_MODE_MEMORY) {
+                HFS.short.tile = {
                     save: function() {
-                        if (ENABLE_TILE_MODE_MEMORY && currentTileUri) {
+                        if (currentTileUri) {
                             immediateSave();
                         }
                     },
                     load: function(path) {
-                        if (ENABLE_TILE_MODE_MEMORY) {
-                            loadTileModeForPath(path || location.pathname);
-                        }
+                        loadTileModeForPath(path || location.pathname);
                     },
                     cleanExpired: cleanExpiredTileData,
                     getStorage: function() {
@@ -765,8 +813,8 @@
                     getCurrentSize: function() {
                         return getTileSizeFromState();
                     }
-                }
-            };
+                };
+            }
         }
 
         setTimeout(() => {
